@@ -1,7 +1,9 @@
 // client_fixed.cpp
 // Interactive client speaking the tracker framed protocol
 
-#include <bits/stdc++.h>
+// #include <bits/stdc++.h>
+#include<string>
+#include<iostream>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <netinet/in.h>

@@ -1,30 +1,31 @@
-#include<iostream>
-#include<sys/socket.h>
-#include<netinet/in.h>
-#include<unistd.h>
-#include<arpa/inet.h>
-using namespace std;
+// tracker2.cpp  -- Secondary tracker that stays in sync but never forwards
 
-int main(){
-    string ip;
-    int port;
-    cin>>ip>>port;
+#include "tracker_common.hpp"   // see below
 
-    int sockFd=socket(AF_INET,SOCK_STREAM,0);
-    sockaddr_in serverAddr{};
-    serverAddr.sin_family=AF_INET;
-    serverAddr.sin_port=htons(port);
-    inet_pton(AF_INET,ip.c_str(),&serverAddr.sin_addr);
-    ::bind(sockFd,(struct sockaddr*)&serverAddr,sizeof(serverAddr));
-    listen(sockFd,5);
+int main(int argc,char**argv){
+    if(argc!=5){
+        cerr<<"Usage: "<<argv[0]
+            <<" <bind_ip> <bind_port> <peer_ip> <peer_port>\n";
+        return 1;
+    }
+    string bind_ip  = argv[1];
+    int    bind_port= stoi(argv[2]);
+    string peer_ip  = argv[3];    // still passed for symmetry
+    int    peer_port= stoi(argv[4]);
+
+    Tracker tracker;
+    SyncQueue dummy(peer_ip,peer_port);    // created but never used
+    int listenFd = prepare_listener(bind_ip,bind_port);
+    cerr<<"Tracker2 listening on "<<bind_ip<<":"<<bind_port
+        <<"  peer="<<peer_ip<<":"<<peer_port<<"\n";
 
     while(true){
-        int cSock=accept(sockFd,NULL,NULL);
-        char buff[1024]={0};
-        int n=recv(cSock,buff,sizeof(buff),0);
-        if(n>0)cout<<"[T2]fwd:"<<buff<<endl;
-        close(cSock);
+        sockaddr_in cli; socklen_t clen=sizeof(cli);
+        int cfd = accept(listenFd,(sockaddr*)&cli,&clen);
+        if(cfd<0){ if(errno==EINTR) continue; perror("accept"); break; }
+        // forward flag = false so we do NOT push to peer
+        thread t(sessionWorker,cfd,ref(tracker),&dummy,false);
+        t.detach();
     }
-    close(sockFd);
-    return 0;
+    close(listenFd);
 }
