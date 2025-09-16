@@ -13,7 +13,7 @@ TRACKER2=$(TRACKER_DIR)/tracker2
 all: $(CLIENT) $(TRACKER1) $(TRACKER2)
 
 $(CLIENT): $(CLIENT_DIR)/client.cpp
-	$(CXX) $(CXXFLAGS) -o $@ $<
+	$(CXX) $(CXXFLAGS) -o $@ $< -lreadline
 
 $(TRACKER1): $(TRACKER_DIR)/tracker1.cpp
 	$(CXX) $(CXXFLAGS) -o $@ $<
