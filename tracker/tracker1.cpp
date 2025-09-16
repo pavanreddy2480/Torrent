@@ -8,7 +8,30 @@
 #include<set>
 using namespace std;
 
-// ======================= Tracker functionality ==========================
+// ======================= Tracker functionality ========================== //
+
+
+typedef struct file{
+    string usrId;
+    string fullSha;
+    vector<string>allSha;
+}file;
+
+struct userAddress{
+    int a=0;
+}userAddress;
+
+class user{
+    string userId;
+    string passwd;
+    struct userAddress usrAdr;
+    queue<pair<string,string>>userReq;
+};
+
+map<string,pair<string,set<string>>,set<file>>groups;
+//<groupId,<groupLead,{groupMem}>,{file}>
+
+
 class Tracker{
     map<string,string> users;                 // user -> password
     map<string,set<string>> groups;           // group -> members
