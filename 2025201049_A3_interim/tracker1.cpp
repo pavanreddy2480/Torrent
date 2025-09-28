@@ -1,9 +1,11 @@
 #include "tracker_common.hpp"
+#include <iostream>
+
 int main(){
     string bind_ip,peer_ip;
     int bind_port,peer_port;
     if(!(cin>>bind_ip>>bind_port>>peer_ip>>peer_port)){
-        cerr<<"Invalid input format\n";
+        cerr<<"Invalid input format";
         return 1;
     }
     Tracker tracker;
@@ -11,8 +13,7 @@ int main(){
     thread retrier(&SyncQueue::run,&sync);
     retrier.detach();
     int listenFd=prepare_listener(bind_ip,bind_port);
-    cerr<<"Tracker1 listening on "<<bind_ip<<":"<<bind_port
-        <<" forwarding to "<<peer_ip<<":"<<peer_port<<"\n";
+    cerr<<"Tracker listening on "<<bind_ip<<":"<<bind_port<<" forwarding to "<<peer_ip<<":"<<peer_port<<" ";
     while(true){
         sockaddr_in cli; socklen_t clen=sizeof(cli);
         int cfd=accept(listenFd,(sockaddr*)&cli,&clen);
