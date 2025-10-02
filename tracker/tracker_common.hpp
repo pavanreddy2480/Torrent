@@ -13,6 +13,7 @@ using namespace std;
 using u32 = uint32_t; using u64 = uint64_t;
 static const size_t MAX_FRAME = 10 * 1024 * 1024;
 
+// --------------------------- Network Helpers ---------------------------
 inline u64 hton64(u64 v){
 #if __BYTE_ORDER==__LITTLE_ENDIAN
     return (((u64)htonl((uint32_t)(v&0xffffffffULL)))<<32) | htonl((uint32_t)((v>>32)&0xffffffffULL));
@@ -47,38 +48,36 @@ inline ssize_t writen(int fd, const void* buf, size_t n){
     return n;
 }
 
+// --------------------------- Tracker Data Structures ---------------------------
 struct GroupInfo{
     string owner;
     unordered_set<string> members;
     unordered_set<string> pending;
 };
 
-// File metadata stored by tracker
 struct FileInfo{
     string group;
-    string owner;              // uploader (first uploader)
+    string owner;
     string file_name;
-    string whole_sha1;         // hex string (40 chars)
-    vector<string> piece_sha1; // each hex string
+    string whole_sha1;
+    vector<string> piece_sha1;
     size_t file_size = 0;
-    unordered_set<u64> seeder_sessions; // sessions that are seeding
+    unordered_set<u64> seeder_sessions;
 };
 
 class Tracker{
     mutex m;
-    unordered_map<string,string> users;          // username -> password
-    unordered_map<u64,string> sessions;          // sess -> username
-    unordered_map<u64,string> session_addrs;    // sess -> "ip:port"
-    unordered_map<u64,unordered_set<string>> session_files; // sess -> set of file keys it seeds
+    unordered_map<string,string> users;
+    unordered_map<u64,string> sessions;
+    unordered_map<u64,string> session_addrs;
+    unordered_map<u64,unordered_set<string>> session_files;
     unordered_map<string,GroupInfo> groups;
-    unordered_map<string,FileInfo> files;        // key = group + '/' + filename
+    unordered_map<string,FileInfo> files;
     static u64 nextId(){ static atomic<u64> c(1); return c++; }
-
     static string make_key(const string&g,const string&f){ return g+"/"+f; }
 
 public:
-    // peer_ip and peer_port are optional; when provided, they are used to record seeder info
-    pair<string,u64> handle(u64 sess,const string& cmdline,const string& peer_ip="",int peer_port=0){
+    pair<string,u64> handle(u64 sess,const string& cmdline,const string& peer_ip,int peer_port){
         stringstream ss(cmdline);
         string cmd; ss >> cmd;
         if(cmd.empty()) return {"ERR empty", sess};
@@ -108,16 +107,15 @@ public:
 
         if(cmd=="logout"){
             for(auto const& key : session_files[sess]){
-                if(files.count(key)){
-                    files[key].seeder_sessions.erase(sess);
-                }
+                if(files.count(key)) files[key].seeder_sessions.erase(sess);
             }
             session_files.erase(sess);
             sessions.erase(sess);
             session_addrs.erase(sess);
-            return {"OK logged out", 0}; // Return session 0 on logout
+            return {"OK logged out", 0};
         }
-
+        
+        // This command is not in the PDF but is useful for peers to tell the tracker their listening port
         if(cmd=="set_addr"){
             string ip; int port; ss >> ip >> port;
             if(ip.empty()||port<=0) return {"ERR usage", sess};
@@ -129,8 +127,7 @@ public:
             string g; ss>>g;
             if(g.empty()) return {"ERR usage", sess};
             if(groups.count(g)) return {"ERR group exists", sess};
-            GroupInfo gi; gi.owner = user; gi.members.insert(user);
-            groups[g]=std::move(gi);
+            groups[g] = {user, {user}, {}};
             return {"OK group created", sess};
         }
         
@@ -139,8 +136,7 @@ public:
             if(g.empty()) return {"ERR usage", sess};
             if(!groups.count(g)) return {"ERR no such group", sess};
             auto &gi = groups[g];
-            if(gi.members.count(user)) return {"ERR already member", sess};
-            if(gi.owner == user) return {"ERR you are the owner", sess};
+            if(gi.members.count(user) || gi.owner == user) return {"ERR already member", sess};
             gi.pending.insert(user);
             return {"OK join requested", sess};
         }
@@ -190,22 +186,14 @@ public:
             if(g.empty() || fname.empty() || fsize_s.empty() || whole.empty() || num_pieces<=0) return {"ERR usage", sess};
             if(!groups.count(g)) return {"ERR no such group", sess};
             if(!groups[g].members.count(user)) return {"ERR not a member", sess};
-            size_t fsize = 0;
-            try{ fsize = stoull(fsize_s); } catch(...) { return {"ERR bad size", sess}; }
+            size_t fsize = stoull(fsize_s);
             vector<string> pieces(num_pieces);
-            for(int i=0;i<num_pieces;i++){
-                ss >> pieces[i];
-                if(pieces[i].empty()) return {"ERR missing piece hashes", sess};
-            }
+            for(int i=0;i<num_pieces;i++){ ss >> pieces[i]; }
             string key = make_key(g,fname);
             if(!files.count(key)){
                  files[key] = {g, user, fname, whole, pieces, fsize, {sess}};
             } else {
-                auto& fi = files[key];
-                fi.whole_sha1 = whole;
-                fi.piece_sha1 = pieces;
-                fi.file_size = fsize;
-                fi.seeder_sessions.insert(sess);
+                files[key].seeder_sessions.insert(sess);
             }
             session_files[sess].insert(key);
             return {"OK uploaded", sess};
@@ -228,12 +216,10 @@ public:
             if(g.empty()||fname.empty()) return {"ERR usage", sess};
             if(!groups.count(g)) return {"ERR no such group", sess};
             if(!groups[g].members.count(user)) return {"ERR not a member", sess};
-
             string key = make_key(g,fname);
             if(!files.count(key)) return {"ERR no such file", sess};
             auto &fi = files[key];
             
-            // Prune disconnected seeders
             unordered_set<u64> valid_sessions;
             for(u64 seeder_sess : fi.seeder_sessions) {
                 if(sessions.count(seeder_sess) && session_addrs.count(seeder_sess)) {
@@ -243,14 +229,12 @@ public:
             fi.seeder_sessions = valid_sessions;
 
             string out = "FILEINFO ";
-            out += to_string(fi.file_size) + " ";
-            out += fi.whole_sha1 + " ";
-            out += to_string(fi.piece_sha1.size());
+            out += to_string(fi.file_size) + " " + fi.whole_sha1 + " " + to_string(fi.piece_sha1.size());
             for(auto &p: fi.piece_sha1) out += " " + p;
             out += " SEEDERS";
             bool first = true;
             for(u64 seeder_sess : fi.seeder_sessions){
-                 out += (first ? " " : ",") + session_addrs[seeder_sess];
+                 out += (first ? " " : ",") + session_addrs.at(seeder_sess);
                  first = false;
             }
             return {out, sess};
@@ -260,9 +244,10 @@ public:
             string g,fname; ss>>g>>fname;
             if(g.empty()||fname.empty()) return {"ERR usage", sess};
             string key = make_key(g,fname);
-            if(!files.count(key)) return {"OK file not shared", sess};
-            files[key].seeder_sessions.erase(sess);
-            session_files[sess].erase(key);
+            if(files.count(key)){
+                files[key].seeder_sessions.erase(sess);
+                session_files[sess].erase(key);
+            }
             return {"OK stopped", sess};
         }
 
@@ -270,24 +255,17 @@ public:
     }
 };
 
-// This part would be used if tracker-to-tracker sync was implemented
-struct SyncItem{ u64 sess; string cmd; string origin_ip; int origin_port; };
+// --------------------------- Tracker-to-Tracker Sync (Stub) ---------------------------
+// NOTE: Full sync implementation is complex and beyond the scope of this fix.
+// This is a placeholder to show where the logic would go.
 class SyncQueue{
-    string peer_ip; int peer_port;
-    deque<SyncItem> q;
-    mutex m; condition_variable cv;
-    bool stop=false;
 public:
-    SyncQueue(const string& ip="", int port=0):peer_ip(ip),peer_port(port){}
-    void enqueue(u64 s, const string &c, const string &origin_ip="", int origin_port=0){
-        lock_guard<mutex> lk(m);
-        q.push_back({s,c,origin_ip,origin_port});
-        cv.notify_one();
-    }
-    void run(){} // NOTE: Sync logic is complex and not implemented here
+    SyncQueue(const string& ip, int port){}
+    void run(){}
 };
 
-inline void sessionWorker(int fd, Tracker &tracker, SyncQueue *sync, bool doForward){
+// --------------------------- Main Connection Handling Logic ---------------------------
+inline void sessionWorker(int fd, Tracker &tracker){
     u32 netlen;
     if(readn(fd, &netlen, sizeof(netlen)) <= 0) { close(fd); return; }
     u32 len = ntohl(netlen);
@@ -295,11 +273,11 @@ inline void sessionWorker(int fd, Tracker &tracker, SyncQueue *sync, bool doForw
     u64 netsess; 
     if(readn(fd, &netsess, sizeof(netsess)) <= 0) { close(fd); return; }
     u64 sess = ntoh64(netsess);
+    string cmd_payload;
     size_t pay_len = len - sizeof(u64);
-    string cmd;
     if(pay_len > 0){
-        cmd.resize(pay_len);
-        if(readn(fd, cmd.data(), pay_len) <= 0) { close(fd); return; }
+        cmd_payload.resize(pay_len);
+        if(readn(fd, cmd_payload.data(), pay_len) <= 0) { close(fd); return; }
     }
 
     sockaddr_in peer{}; socklen_t plen = sizeof(peer);
@@ -311,15 +289,14 @@ inline void sessionWorker(int fd, Tracker &tracker, SyncQueue *sync, bool doForw
         origin_port = ntohs(peer.sin_port);
     }
 
-    auto [reply, newSess] = tracker.handle(sess, cmd, origin_ip, origin_port);
+    auto [reply, newSess] = tracker.handle(sess, cmd_payload, origin_ip, origin_port);
 
     u32 respLen = htonl(sizeof(u64) + reply.size());
-    u64 respSess = hton64(newSess);
-    if(writen(fd, &respLen, sizeof(respLen)) < 0) { close(fd); return; }
-    if(writen(fd, &respSess, sizeof(respSess)) < 0) { close(fd); return; }
-    if(!reply.empty()) {
-        if(writen(fd, reply.data(), reply.size()) < 0) { close(fd); return; }
-    }
+    u64 respSess = hton64(newSess == 0 ? sess : newSess);
+    writen(fd, &respLen, sizeof(respLen));
+    writen(fd, &respSess, sizeof(respSess));
+    if(!reply.empty()) writen(fd, reply.data(), reply.size());
+    
     close(fd);
 }
 
