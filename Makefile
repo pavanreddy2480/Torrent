@@ -1,5 +1,5 @@
 CXX      = g++
-CXXFLAGS = -Wall -O2 -pthread -std=c++17
+CXXFLAGS = -Wall -O2 -pthread -std=c++17 -Wno-deprecated-declarations
 
 # --- macOS OpenSSL flags ---
 # Use 'shell' to ask Homebrew where OpenSSL is installed
@@ -32,23 +32,30 @@ $(TRACKER2): $(TRACKER_DIR)/tracker2.cpp $(TRACKER_DIR)/tracker_common.hpp
 
 # ----- convenience run targets -----
 run-client: $(CLIENT)
-	@echo "Starting client (connect manually to a tracker)..."
+	@echo "Starting client (connect to tracker at 127.0.0.1:6000)..."
 	./$(CLIENT) 127.0.0.1 6000
 
+# Tracker1 listens on 6000, forwards to peer 7000
 run-tracker1: $(TRACKER1)
-	@echo "Starting tracker1 on 127.0.0.1:6000 (peer:127.0.0.1:7000)..."
+	@echo "Starting tracker1: bind=127.0.0.1:6000 peer=127.0.0.1:7000"
 	./$(TRACKER1) 127.0.0.1 6000 127.0.0.1 7000
 
+# Tracker2 listens on 7000, forwards to peer 6000
 run-tracker2: $(TRACKER2)
-	@echo "Starting tracker2 on 127.0.0.1:7000 (peer:127.0.0.1:6000)..."
+	@echo "Starting tracker2: bind=127.0.0.1:7000 peer=127.0.0.1:6000"
 	./$(TRACKER2) 127.0.0.1 7000 127.0.0.1 6000
 
 # Start both trackers in background, then run client
 run-all: all
-	@echo "Launching trackers and client..."
+	@echo "Launching tracker1, tracker2, then client..."
 	@./$(TRACKER1) 127.0.0.1 6000 127.0.0.1 7000 & \
 	 ./$(TRACKER2) 127.0.0.1 7000 127.0.0.1 6000 & \
 	 sleep 1 && ./$(CLIENT) 127.0.0.1 6000
+
+# Run only one tracker (standalone, no replication)
+run-test: $(TRACKER1)
+	@echo "Starting tracker1 standalone on 127.0.0.1:6000"
+	./$(TRACKER1) 127.0.0.1 6000 0.0.0.0 0
 
 clean:
 	rm -f $(CLIENT) $(TRACKER1) $(TRACKER2)
